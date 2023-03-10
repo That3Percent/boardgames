@@ -9,33 +9,8 @@ use {
 type Coords = ArrayVec<(isize, isize), 4>;
 
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-enum Tile {
-    Filled, // Has a piece played
-    Empty, // Could have piece played
-    Null, // Not a part of the game
-    Bonus(u32), // Has a star
-}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum Piece {
-    One,
-    Two,
-    ThreeRow,
-    FourRow,
-    ThreeL,
-    FourL,
-    FourT,
-    FourSquare,
-    FourZ,
-}
 
-fn die_roll<R: Rng>(r: &mut R) -> u32 {
-    let d4 = r.gen_range(1..=4);
-    let d6 = r.gen_range(1..=6);
-
-    d4 + d6
-}
 
 fn roll_to_piece(roll: u32) -> Piece {
     use Piece::*;
@@ -53,128 +28,6 @@ fn roll_to_piece(roll: u32) -> Piece {
     }
 }
 
-impl Piece {
-    fn random_from_dice<R: Rng>(r: &mut R) -> Self {
-        roll_to_piece(die_roll(r))
-    }
-    /// Transformations which when evaluated over each placement point yields a unique
-    /// and complete set of movement options.
-    /// All of them include (0, 0).
-    /// Coordinates are (X, Y)
-    /// If a tile is directly above another tile, it goes right after the tile it is above.
-    fn transformations(&self) -> &'static [&'static [(isize, isize)]] {
-        use Piece::*;
-        // TODO: Write a unit test showing these are complete and unique.
-        match self {
-            One => &[
-                &[(0, 0)]
-            ],
-            Two => &[
-                &[(0, 0), (0, 1)],
-                &[(0, 0), (1, 0)],
-            ],
-            FourRow => &[
-                &[(0, 0), (0, 1), (0, 2), (0, 3)],
-                &[(0, 0), (1, 0), (2, 0), (3, 0)],
-            ],
-            FourL => &[
-                &[(0, 0), (0, 1), (1, 0), (2, 0)],
-                &[(0, 0), (0, 1), (-1, 0), (-2, 0)],
-                &[(0, 0), (0, 1), (0, 2), (-1, 2)],
-                &[(0, 0), (0, 1), (0, 2), (1, 2)],
-                &[(0, 0), (0, 1), (1, 1), (2, 1)],
-                &[(0, 0), (0, 1), (-1, 1), (-2, 1)],
-                &[(0, 0), (-1, 0), (-1, 1), (-1, 2)],
-                &[(0, 0), (1, 0), (1, 1), (1, 2)],
-            ],
-            FourSquare => &[
-                &[(0, 0), (0, 1), (1, 0), (1, 1)],
-            ],
-            FourT => &[
-                &[(0, 0), (0, 1), (-1, 1), (1, 1)],
-                &[(0, 0), (0, 1), (-1, 0), (1, 0)],
-                &[(0, 0), (0, 1), (0, 2), (1, 1)],
-                &[(0, 0), (0, 1), (0, 2), (-1, 1)],
-            ],
-            ThreeRow => &[
-                &[(0, 0), (0, 1), (0, 2)],
-                &[(0, 0), (1, 0), (2, 0)],
-            ],
-            ThreeL => &[
-                &[(0, 0), (0, 1), (1, 1)],
-                &[(0, 0), (0, 1), (-1, 1)],
-                &[(0, 0), (1, 0), (1, 1)],
-                &[(0, 0), (-1, 0), (-1, 1)],
-            ],
-            FourZ => &[
-                &[(0, 0), (1, 0), (1, 1), (2, 1)],
-                &[(0, 0), (-1, 0), (-1, 1), (-2, 1)],
-                &[(0, 0), (0, 1), (-1, 1), (-1, 2)],
-                &[(0, 0), (0, 1), (1, 1), (1, 2)],
-            ],
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-enum Bank {
-    Unused,
-    Stored(Piece),
-    Used,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
-struct GameState {
-    bank: Bank,
-    piece: Option<Piece>,
-    tower: Tower,
-    bonus: Option<u32>,
-}
-
-
-
-fn available_moves(game: &GameState) -> Vec<Move> {
-    if game.bonus.is_some() {
-        return Vec::new();
-    }
-    let piece = game.piece.unwrap();
-
-    let mut moves = Vec::new();
-    let mut pieces = ArrayVec::<_, 2>::new();
-
-    pieces.push((Source::Dice, piece));
-
-    match game.bank {
-        Bank::Unused => {
-            moves.push(Move::BankPiece);
-        },
-        Bank::Stored(p) => {
-            if p != piece {
-                pieces.push((Source::Bank, p));
-            }
-        }
-        Bank::Used => {},
-    }
-
-    for row in 0..7 {
-        for column in 0..15 {
-            if game.tower.get((row, column)) == Tile::Empty {
-                let cell = (row as isize, column as isize);
-                for (source, piece) in pieces.iter() {
-                    for transformation in piece.transformations() {
-                        let placement = transform(cell, &transformation);
-                        if placement_is_legal(&game.tower, &placement) {
-                            moves.push(Move::PlacePiece(PlacePiece { source: *source, placement }));
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
-    
-    moves
-}
 
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -483,17 +336,7 @@ fn calculate_ev_no_piece(game: &GameState, lookup: &mut Lookup) -> f64 {
     ev
 }
 
-fn perfect_hash(select_from: &[(u32, u32)]) -> u32 {
-    let mut place = 1;
-    let mut total = 0;
-    for select_from in select_from {
-        assert!(select_from.0 < select_from.1);
-        assert!(select_from.1 != 0);
-        total += select_from.0 * place;
-        place *= select_from.1;
-    }
-    total
-}
+
 
 
 fn main() {
