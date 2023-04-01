@@ -9,8 +9,6 @@ use {
 
 
 
-
-
 fn eval_position(game_state: &mut GameState) -> f64 {
     const COUNT: usize = 32;
     let tests = vec![0; COUNT];
@@ -196,7 +194,7 @@ fn main() {
                 0 => break,
                 1 => {},
                 _ => {
-                    for _ in 0..20_000_000 {
+                    for _ in 0..1_000_000 {
                         context.game = game.clone();
                         mcts_run(&mut context, &mut r);
                     }

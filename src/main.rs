@@ -3,20 +3,47 @@ use utils::*;
 mod rules;
 use rules::*;
 
+type Num = f32;
+
 use {
-    std::time::Instant,
     rand::thread_rng,
 };
 
-fn hash(game: &GameState) -> u32 {
+pub trait Strategy: Copy {
+    fn worst(&self) -> Num;
+    fn prefer(&self, prev: Num, eval: Num) -> bool;
+}
+
+#[derive(Copy, Clone)]
+pub struct MaxEV;
+impl Strategy for MaxEV {
+    fn worst(&self) -> Num {
+        Num::MIN
+    }
+    fn prefer(&self, prev: Num, eval: Num) -> bool {
+        eval > prev
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct MinEV;
+impl Strategy for MinEV {
+    fn worst(&self) -> Num {
+        Num::MAX
+    }
+    fn prefer(&self, prev: Num, eval: Num) -> bool {
+        eval < prev
+    }
+}
+
+
+fn hash<const W: usize, const H: usize>(game: &GameState<W, H>) -> u32 {
     assert!(game.piece.is_none());
-    // TODO: Terrible efficiency. We can do a perfect hash into a u32, affording a
-    // Vec instead of giant hashmap
-    let mut result = [(0u32, 0u32); 8];
-    for row in 0..7 {
+    let mut hasher = PerfectHasher::new();
+    for row in 0..W {
         let mut count_filled = 0;
         let mut count_possible = 1;
-        for column in 0..15 {
+        for column in 0..H {
             match game.tower.get((row, column)) {
                 Tile::Filled => {
                     count_filled += 1;
@@ -28,7 +55,7 @@ fn hash(game: &GameState) -> u32 {
                 Tile::Null => {}
             }
         }
-        result[row] = (count_filled, count_possible);
+        hasher.update(count_filled, count_possible);
     }
     let bank = match game.bank {
         Bank::Unused => 0,
@@ -43,41 +70,43 @@ fn hash(game: &GameState) -> u32 {
         Bank::Stored(Piece::ThreeRow) => 9,
         Bank::Used => 10,
     };
-    result[7] = (bank, 11);
-    perfect_hash(&result)
+    hasher.update(bank, 11);
+    hasher.digest()
 }
 
 
 
-fn calculate_ev(game: &GameState, lookup: &mut Lookup) -> f64 {
+fn calculate_ev<const W: usize, const H: usize, C: Context>(game: &GameState<W, H>, ctx: &mut C) -> Num {
     if game.piece.is_some() {
-        calculate_ev_with_piece(game, lookup)
+        calculate_ev_with_piece(game, ctx)
     } else {
-        calculate_ev_no_piece(game, lookup)
+        calculate_ev_no_piece(game, ctx)
     }
 }
 
-fn calculate_ev_with_piece(game: &GameState, lookup: &mut Lookup) -> f64 {
+fn calculate_ev_with_piece<const W: usize, const H: usize, C: Context>(game: &GameState<W, H>, ctx: &mut C) -> Num {
     assert!(game.piece.is_some());
     let moves = game.available_moves();
     if moves.len() == 0 {
-        game.score() as f64
+        game.score() as Num
     } else {
-        let mut min_ev = f64::MAX;
+        let mut best_ev = ctx.strategy().worst();
         for mv in moves {
             let mut game = game.clone();
             game.execute_move(&mv);
-            let ev = calculate_ev(&game, lookup);
-            min_ev = min_ev.min(ev);
+            let ev = calculate_ev(&game, ctx);
+            if ctx.strategy().prefer(best_ev, ev) {
+                best_ev = ev;
+            }
         }
-        min_ev
+        best_ev
     }
 }
 
-fn calculate_ev_no_piece(game: &GameState, lookup: &mut Lookup) -> f64 {
+fn calculate_ev_no_piece<const W: usize, const H: usize, C: Context>(game: &GameState<W, H>, ctx: &mut C) -> Num {
     let hash = hash(&game);
-    if let Some(cached) = lookup.lookup(hash) {
-        return cached;
+    if let Some(cached) = ctx.lookup().get(&hash) {
+        return *cached;
     }
     
     let mut total_score = 0.0;
@@ -96,18 +125,43 @@ fn calculate_ev_no_piece(game: &GameState, lookup: &mut Lookup) -> f64 {
         let piece = roll_to_piece(roll);
         let mut game = game.clone();
         game.piece = Some(piece);
-        let ev = calculate_ev(&game, lookup);
+        let ev = calculate_ev(&game, ctx);
        
         total_count += count;
         total_score += ev * count;
     }
     
     let ev = total_score / total_count;
-    lookup.insert(hash, ev);
+    ctx.lookup_mut().insert(hash, ev);
     ev
 }
 
+trait Context {
+    type Strategy: Strategy;
+    type Lookup: Lookup<Key = u32, Value = Num>;
+    fn strategy(&self) -> Self::Strategy;
+    fn lookup(&self) -> &Self::Lookup;
+    fn lookup_mut(&mut self) -> &mut Self::Lookup;
+}
 
+struct C<S, L> {
+    strategy: S,
+    lookup: L,
+}
+
+impl<S, L> Context for C<S, L> where S: Strategy, L: Lookup<Key = u32, Value = Num> {
+    type Strategy = S;
+    type Lookup = L;
+    fn strategy(&self) -> Self::Strategy {
+        self.strategy
+    }
+    fn lookup(&self) -> &Self::Lookup {
+        &self.lookup
+    }
+    fn lookup_mut(&mut self) -> &mut Self::Lookup {
+        &mut self.lookup
+    }
+}
 
 
 fn main() {
@@ -115,26 +169,34 @@ fn main() {
     // So, we can calculate perfect play by way of a brute forced a lookup table
     // containing state -> EV and iterate over currently reachable positions to check
     // which is the best.
-    /*
-    let mut lookup = Lookup {
-        len: 0,
-        table: Vec::new(),
-    };
-    
-    let game = GameState::new();
-    calculate_ev(&game, &mut lookup);
-    let data = lookup.to_bytes();
-    std::fs::write("./cache.bin", data).unwrap();
-    */
-    let mut lookup = Lookup::from_bytes(&std::fs::read("./cache.bin").unwrap());
 
-    let start = Instant::now();
+    let strategy = MinEV;
+    let board = || wide();
+
+    let path = "./min_cache.bin";
+    let mut ctx = if let Ok(bytes) = std::fs::read(&path) {
+        C {
+            lookup: DenseLookup::from_bytes(&bytes),
+            strategy,
+        }
+    } else {
+        let mut ctx = C {
+            lookup: DenseLookup::new(),
+            strategy
+        };
+        let game = GameState::new(board());
+        calculate_ev(&game, &mut ctx);
+        let data = ctx.lookup().to_bytes();
+        std::fs::write(&path, data).unwrap();
+        ctx
+    };
+
     let mut rng = thread_rng();
     let mut score = 0.0;
     let games = 1;
     let mut high_score = 0;
     for _ in 0..games {
-        let mut game = GameState::new();
+        let mut game = GameState::new(board());
         loop {
             if game.piece.is_none() {
                 game.piece = Some(Piece::random_from_dice(&mut rng));
@@ -142,12 +204,12 @@ fn main() {
             }
             let moves = game.available_moves();
             let mut best_move = None;
-            let mut best_ev = f64::MAX;
+            let mut best_ev = strategy.worst();
             for mv in moves {
                 let mut game = game.clone();
                 game.execute_move(&mv);
-                let ev = calculate_ev(&game, &mut lookup);
-                if ev < best_ev {
+                let ev = calculate_ev(&game, &mut ctx);
+                if strategy.prefer(best_ev, ev) {
                     best_ev = ev;
                     best_move = Some(mv);
                 }
@@ -166,7 +228,7 @@ fn main() {
                     game.tower.print();
                     println!("{}", game.score());
                 }
-                score += game.score() as f64;
+                score += game.score() as Num;
                 //println!("{}", game.score());
                 //println!("==========================");
                 break;
@@ -174,9 +236,8 @@ fn main() {
         }
     }
 
-    dbg!(Instant::now() - start);
 
-    println!("{}", score / games as f64);
-    println!("{}", calculate_ev(&GameState::new(), &mut lookup));
+    println!("{}", score / games as Num);
+    println!("{}", calculate_ev(&GameState::new(board()), &mut ctx));
 }
 

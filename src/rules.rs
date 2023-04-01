@@ -9,14 +9,14 @@ type Coords = ArrayVec<(isize, isize), 4>;
 
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
-pub struct GameState {
+pub struct GameState<const W: usize, const H: usize> {
     pub bank: Bank,
     pub piece: Option<Piece>,
-    pub tower: Tower,
+    pub tower: Tower<W, H>,
     pub bonus: Option<u32>,
 }
 
-impl GameState {
+impl<const W: usize, const H: usize> GameState<W, H> {
     pub fn available_moves(&self) -> Vec<Move> {
         if self.bonus.is_some() {
             return Vec::new();
@@ -40,14 +40,14 @@ impl GameState {
             Bank::Used => {},
         }
 
-        for row in 0..7 {
-            for column in 0..15 {
+        for row in 0..W {
+            for column in 0..H {
                 if self.tower.get((row, column)) == Tile::Empty {
                     let cell = (row as isize, column as isize);
                     for (source, piece) in pieces.iter() {
                         for transformation in piece.transformations() {
                             let placement = transform(cell, &transformation);
-                            if placement_is_legal(&self.tower, &placement) {
+                            if self.tower.placement_is_legal(&placement) {
                                 moves.push(Move::PlacePiece(PlacePiece { source: *source, placement }));
                             }
                         }
@@ -196,11 +196,9 @@ pub struct PlacePiece {
     placement: Coords,
 }
 
-
-
-impl GameState {
-    pub fn new() -> Self {
-        GameState { bank: Bank::Unused, piece: None, tower: Tower::new(), bonus: None }
+impl<const W: usize, const H: usize> GameState<W, H> {
+    pub fn new(tower: Tower<W, H>) -> Self {
+        GameState { bank: Bank::Unused, piece: None, tower, bonus: None }
     }
 
     pub fn execute_move(&mut self, mov: &Move) {
@@ -223,12 +221,15 @@ impl GameState {
     }
 }
 
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Tower {
-    data: Box<[[Tile; 7]; 15]>,
+pub struct Tower<const W: usize, const H: usize> {
+    data: Box<[[Tile; W]; H]>,
 }
 
-impl Tower {
+
+
+impl<const W: usize, const H: usize> Tower<W, H> {
     fn count_filled(&self) -> u32 {
         let mut count = 0;
         for row in (&self.data).iter() {
@@ -240,11 +241,30 @@ impl Tower {
         }
         count
     }
+    fn placement_is_legal(&self, placement: &Coords) -> bool {
+        for i in 0..placement.len() {
+            let cell = placement[i];
+            match self.try_get(cell) {
+                Tile::Bonus(_) | Tile::Empty => {
+                    // Now check the tile below
+                    let cell_below = (cell.0, cell.1-1);
+                    // TODO: This is bug if bonus is not at the top.
+                    if self.try_get(cell_below) == Tile::Empty {
+                        if i == 0 || (placement[i-1]) != cell_below {
+                            return false;
+                        }
+                    }
+                },
+                Tile::Filled | Tile::Null => { return false; }
+            }
+        }
+        true
+    }
     pub fn get(&self, cell: (usize, usize)) -> Tile {
         self.data[cell.1][cell.0]
     }
     pub fn try_get(&self, cell: (isize, isize)) -> Tile {
-        if (cell.0 > 6) || (cell.0 < 0) | (cell.1 > 14) || (cell.1 < 0) {
+        if (cell.0 >= W as isize) || (cell.0 < 0) | (cell.1 >= H as isize) || (cell.1 < 0) {
             Tile::Null
         } else {
             self.get((cell.0 as usize, cell.1 as usize))
@@ -275,34 +295,55 @@ impl Tower {
             println!();
         }
     }
-    fn new() -> Self {
-        let x = Tile::Null;
-        let o = Tile::Empty;
-        let a = Tile::Bonus(2);
-        let b = Tile::Bonus(3);
-        let c = Tile::Bonus(4);
-        let d = Tile::Bonus(5);
-        Self {
-            // Draws the tower "upside down"
-            // because I like to think of up as +1 y in the rest of the code.
-            data: Box::new([
-                [o, o, o, x, o, o, o],
-                [o, o, o, o, o, o, o],
-                [o, o, o, o, o, o, o],
-                [x, o, o, o, o, o, o],
-                [x, o, o, o, o, o, o],
-                [x, o, o, o, o, o, a],
-                [x, o, o, o, o, o, x],
-                [x, o, o, o, o, o, x],
-                [x, b, o, o, o, o, x],
-                [x, x, o, o, o, o, x],
-                [x, x, o, o, o, o, x],
-                [x, x, o, o, o, c, x],
-                [x, x, o, o, o, x, x],
-                [x, x, o, o, o, x, x],
-                [x, x, o, d, o, x, x],
-            ]),
-        }
+}
+
+pub fn tower() -> Tower<7, 16> {
+    let x = Tile::Null;
+    let o = Tile::Empty;
+    let a = Tile::Bonus(2);
+    let b = Tile::Bonus(3);
+    let c = Tile::Bonus(4);
+    let d = Tile::Bonus(5);
+    Tower {
+        // Draws the tower "upside down"
+        // because I like to think of up as +1 y in the rest of the code.
+        data: Box::new([
+            [o, o, o, x, o, o, o],
+            [o, o, o, o, o, o, o],
+            [o, o, o, o, o, o, o],
+            [x, o, o, o, o, o, o],
+            [x, o, o, o, o, o, o],
+            [x, o, o, o, o, o, a],
+            [x, o, o, o, o, o, x],
+            [x, o, o, o, o, o, x],
+            [x, b, o, o, o, o, x],
+            [x, x, o, o, o, o, x],
+            [x, x, o, o, o, o, x],
+            [x, x, o, o, o, c, x],
+            [x, x, o, o, o, x, x],
+            [x, x, o, o, o, x, x],
+            [x, x, o, o, o, x, x],
+            [x, x, x, d, x, x, x],
+        ]),
+    }
+}
+
+
+pub fn wide() -> Tower<11, 7> {
+    let x = Tile::Null;
+    let o = Tile::Empty;
+    Tower {
+        // Draws the tower "upside down"
+        // because I like to think of up as +1 y in the rest of the code.
+        data: Box::new([
+            [o, x, x, o, o, x, o, x, x, x, o],
+            [o, o, o, o, o, o, o, o, o, o, o],
+            [o, o, o, o, o, o, o, o, o, o, o],
+            [o, o, o, o, o, o, o, o, o, o, o],
+            [o, o, o, o, o, x, o, o, o, o, o],
+            [o, o, o, o, o, x, o, x, o, o, o],
+            [x, o, o, o, x, x, o, x, x, x, o],
+        ]),
     }
 }
 
@@ -316,23 +357,5 @@ fn transform(cell: (isize, isize), amount: &[(isize, isize)]) -> Coords {
     coords
 }
 
-fn placement_is_legal(tower: &Tower, placement: &Coords) -> bool {
-    for i in 0..placement.len() {
-        let cell = placement[i];
-        match tower.try_get(cell) {
-            Tile::Bonus(_) | Tile::Empty => {
-                // Now check the tile below
-                let cell_below = (cell.0, cell.1-1);
-                // TODO: This is bug if bonus is not at the top.
-                if tower.try_get(cell_below) == Tile::Empty {
-                    if i == 0 || (placement[i-1]) != cell_below {
-                        return false;
-                    }
-                }
-            },
-            Tile::Filled | Tile::Null => { return false; }
-        }
-    }
-    true
-}
+
 
