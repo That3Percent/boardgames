@@ -3,6 +3,11 @@ use utils::*;
 mod rules;
 use rules::*;
 
+use bevy::prelude::*;
+use bevy::app::App;
+
+
+
 type Num = f32;
 
 use {
@@ -106,7 +111,7 @@ fn calculate_ev_with_piece<const W: usize, const H: usize, C: Context>(game: &Ga
 fn calculate_ev_no_piece<const W: usize, const H: usize, C: Context>(game: &GameState<W, H>, ctx: &mut C) -> Num {
     let hash = hash(&game);
     if let Some(cached) = ctx.lookup().get(&hash) {
-        return *cached;
+        return cached;
     }
     
     let mut total_score = 0.0;
@@ -162,6 +167,27 @@ impl<S, L> Context for C<S, L> where S: Strategy, L: Lookup<Key = u32, Value = N
         &mut self.lookup
     }
 }
+fn hello_world() {
+    println!("hello world!");
+}
+
+#[derive(Component)]
+struct Person;
+#[derive(Component)]
+struct Name(String);
+
+fn add_people(mut commands: Commands) {
+    commands.spawn((Person, Name("Elaina Proctor".to_string())));
+    commands.spawn((Person, Name("Renzo Hume".to_string())));
+    commands.spawn((Person, Name("Zayna Nieves".to_string())));
+}
+
+fn greet_people(query: Query<&Name, With<Person>>) {
+    for name in &query {
+        println!("hello {}!", name.0);
+    }
+}
+
 
 
 fn main() {
@@ -169,6 +195,15 @@ fn main() {
     // So, we can calculate perfect play by way of a brute forced a lookup table
     // containing state -> EV and iterate over currently reachable positions to check
     // which is the best.
+
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_startup_system(add_people)
+        .add_system(hello_world)
+        .add_system(greet_people)
+        .run();
+    return;
+    
 
     let strategy = MinEV;
     let board = || wide();
@@ -181,7 +216,7 @@ fn main() {
         }
     } else {
         let mut ctx = C {
-            lookup: DenseLookup::new(),
+            lookup: DenseLookup::new(0),
             strategy
         };
         let game = GameState::new(board());
